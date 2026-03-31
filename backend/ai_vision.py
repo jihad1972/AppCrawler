@@ -1,11 +1,17 @@
 """AI Vision provider – Gemini-based screen analysis for mobile app crawling."""
 
+import asyncio
 import base64
 import json
 import logging
 import re
+import time
 from pathlib import Path
 from typing import Optional
+
+# Track last API call to enforce minimum cooldown (free tier: 15 RPM)
+_last_api_call: float = 0.0
+_MIN_CALL_INTERVAL: float = 5.0  # seconds between API calls
 
 import google.generativeai as genai
 
@@ -99,11 +105,15 @@ async def analyze_screen(
     screenshot_path: str,
     visited_screens: list[str],
     recent_actions: list[str],
+    max_retries: int = 3,
 ) -> tuple[Optional[ActionDecision], str]:
     """
     Analyze a screenshot and return the next action to take.
     Returns (ActionDecision, screen_label).
+    Retries with exponential backoff on rate-limit errors.
     """
+    import asyncio
+
     _configure_gemini()
 
     model = genai.GenerativeModel(GEMINI_MODEL)
@@ -118,21 +128,40 @@ async def analyze_screen(
 
     image_part = _load_image_as_part(screenshot_path)
 
-    try:
-        response = model.generate_content(
-            [prompt, image_part],
-            generation_config=genai.GenerationConfig(
-                temperature=0.4,
-                max_output_tokens=500,
-            ),
-        )
-        result = _parse_response(response.text)
-        if result is None:
-            return None, "Unknown"
-        action, screen_label = result
-        logger.info("AI decision: %s at (%s,%s) – %s", action.action, action.x, action.y, action.reasoning)
-        return action, screen_label
+    global _last_api_call
 
-    except Exception as e:
-        logger.error("Gemini API error: %s", e)
-        return None, "Error"
+    for attempt in range(max_retries + 1):
+        try:
+            # Enforce minimum cooldown between API calls
+            elapsed_since_last = time.monotonic() - _last_api_call
+            if elapsed_since_last < _MIN_CALL_INTERVAL:
+                wait = _MIN_CALL_INTERVAL - elapsed_since_last
+                logger.debug("Waiting %.1fs for API cooldown", wait)
+                await asyncio.sleep(wait)
+
+            _last_api_call = time.monotonic()
+            response = model.generate_content(
+                [prompt, image_part],
+                generation_config=genai.GenerationConfig(
+                    temperature=0.4,
+                    max_output_tokens=500,
+                ),
+            )
+            result = _parse_response(response.text)
+            if result is None:
+                return None, "Unknown"
+            action, screen_label = result
+            logger.info("AI decision: %s at (%s,%s) – %s", action.action, action.x, action.y, action.reasoning)
+            return action, screen_label
+
+        except Exception as e:
+            error_str = str(e).lower()
+            is_rate_limit = "429" in str(e) or "quota" in error_str or "rate" in error_str or "resource" in error_str
+            if is_rate_limit and attempt < max_retries:
+                delay = 20 * (2 ** attempt)  # 20s, 40s, 80s
+                logger.warning("Gemini rate limit hit (attempt %d/%d), retrying in %ds...", attempt + 1, max_retries, delay)
+                await asyncio.sleep(delay)
+                continue
+            logger.error("Gemini API error: %s", e)
+            return None, "Error"
+
