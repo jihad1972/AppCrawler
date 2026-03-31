@@ -1,5 +1,8 @@
-const API_BASE = 'http://localhost:8000'
-const WS_BASE  = 'ws://localhost:8000'
+// API base URL – configurable via VITE_API_URL env var
+// Local dev: defaults to http://localhost:8000
+// Vercel:    set VITE_API_URL in project settings to your backend URL
+const API_BASE = (import.meta.env.VITE_API_URL || 'http://localhost:8000').replace(/\/$/, '')
+const WS_BASE  = API_BASE.replace(/^http/, 'ws')
 
 export async function fetchJSON(path, options = {}) {
   const res = await fetch(`${API_BASE}${path}`, {
