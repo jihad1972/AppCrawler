@@ -10,8 +10,7 @@ function Navbar() {
     <nav className="navbar">
       <div className="container">
         <Link to="/" className="navbar-brand">
-          <span className="logo-icon">🔍</span>
-          AppCrawler
+          AppCrawlr
         </Link>
         <div className="navbar-links">
           <Link to="/" className={`btn btn-sm ${location.pathname === '/' ? 'btn-primary' : 'btn-secondary'}`}>
